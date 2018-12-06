@@ -9,6 +9,7 @@ import torch.optim as optim
 import numpy as np
 
 import time
+from datetime import datetime
 import os
 from six.moves import cPickle
 
@@ -24,6 +25,8 @@ try:
 except ImportError:
     print("tensorboardX is not installed")
     tb = None
+
+print_freq = 80
 
 def add_summary_value(writer, key, value, iteration):
     if writer:
@@ -83,6 +86,7 @@ def train(opt):
     if vars(opt).get('start_from', None) is not None and os.path.isfile(os.path.join(opt.start_from,"optimizer.pth")):
         optimizer.load_state_dict(torch.load(os.path.join(opt.start_from, 'optimizer.pth')))
 
+    total_loss = 0
     while True:
         if update_lr_flag:
                 # Assign the learning rate
@@ -111,7 +115,8 @@ def train(opt):
         start = time.time()
         # Load data from train split (0)
         data = loader.get_batch('train')
-        print('Read data:', time.time() - start)
+        if (iteration % print_freq == 0):
+            print('Read data:', time.time() - start)
 
         torch.cuda.synchronize()
         start = time.time()
@@ -132,19 +137,21 @@ def train(opt):
         utils.clip_gradient(optimizer, opt.grad_clip)
         optimizer.step()
         train_loss = loss.item()
+        total_loss = total_loss + train_loss
         torch.cuda.synchronize()
         end = time.time()
-        if not sc_flag:
-            print("iter {} (epoch {}), train_loss = {:.3f}, time/batch = {:.3f}" \
-                .format(iteration, epoch, train_loss, end - start))
-        else:
-            print("iter {} (epoch {}), avg_reward = {:.3f}, time/batch = {:.3f}" \
-                .format(iteration, epoch, np.mean(reward[:,0]), end - start))
+        if (iteration % print_freq == 0):
+            if not sc_flag:
+                print("iter {} (epoch {}), train_loss = {:.3f}, time/batch = {:.3f}" \
+                    .format(iteration, epoch, train_loss, end - start))
+            else:
+                print("iter {} (epoch {}), avg_reward = {:.3f}, time/batch = {:.3f}" \
+                    .format(iteration, epoch, np.mean(reward[:,0]), end - start))
 
         # Update the iteration and epoch
         iteration += 1
         if data['bounds']['wrapped']:
-            epoch += 1
+            # epoch += 1
             update_lr_flag = True
 
         # Write the training loss summary
@@ -160,10 +167,13 @@ def train(opt):
             ss_prob_history[iteration] = model.ss_prob
 
         # make evaluation on validation set, and save model
-        if (iteration % opt.save_checkpoint_every == 0):
+        # if (iteration % opt.save_checkpoint_every == 0):
+        if data['bounds']['wrapped']:
+            epoch += 1
             # eval model
             eval_kwargs = {'split': 'val',
-                            'dataset': opt.input_json}
+                            'dataset': opt.input_json,
+                            'verbose': False}
             eval_kwargs.update(vars(opt))
             val_loss, predictions, lang_stats = eval_utils.eval_split(dp_model, crit, loader, eval_kwargs)
 
@@ -176,7 +186,13 @@ def train(opt):
 
             # Save model if is improving on validation result
             if opt.language_eval == 1:
-                current_score = lang_stats['CIDEr']
+                current_score = lang_stats
+                f = open('train_log_%s.txt' % opt.id,'a')
+                f.write('Epoch {}: | Date: {} | TrainLoss: {} | ValLoss: {} | Score: {}'.format(epoch, str(datetime.now()), str(total_loss/2200), str(val_loss), str(current_score)))
+                f.write('\n')
+                f.close()
+                print('-------------------wrote to log file')
+                total_loss = 0
             else:
                 current_score = - val_loss
 
@@ -185,6 +201,8 @@ def train(opt):
                 if best_val_score is None or current_score > best_val_score:
                     best_val_score = current_score
                     best_flag = True
+                if not os.path.isdir(opt.checkpoint_path):
+                    os.mkdir(opt.checkpoint_path)
                 checkpoint_path = os.path.join(opt.checkpoint_path, 'model.pth')
                 torch.save(model.state_dict(), checkpoint_path)
                 print("model saved to {}".format(checkpoint_path))
