@@ -106,7 +106,7 @@ class DataLoaderRaw():
                 img = img[:,:,np.newaxis]
                 img = np.concatenate((img, img, img), axis=2)
 
-            img = img.astype('float32')/255.0
+            img = img[:,:,:3].astype('float32')/255.0
             img = torch.from_numpy(img.transpose([2,0,1])).cuda()
             img = preprocess(img)
             with torch.no_grad():
@@ -122,7 +122,8 @@ class DataLoaderRaw():
 
         data = {}
         data['fc_feats'] = fc_batch
-        data['att_feats'] = att_batch
+        data['att_feats'] = att_batch.reshape(batch_size, -1, 2048)
+        data['att_masks'] = None
         data['bounds'] = {'it_pos_now': self.iterator, 'it_max': self.N, 'wrapped': wrapped}
         data['infos'] = infos
 
